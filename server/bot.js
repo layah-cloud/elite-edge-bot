@@ -24,6 +24,12 @@ function isMonitoredChat(chatId) {
   return ids.has(String(chatId));
 }
 
+// Only process join/leave events from the VIP channel, NOT the discussion group.
+// When someone is approved, Telegram sends chat_member to BOTH chats, causing duplicates.
+function isJoinLeaveChat(chatId) {
+  return String(chatId) === String(GROUP_ID);
+}
+
 async function startBot() {
   if (!TOKEN) {
     console.log('No TELEGRAM_BOT_TOKEN set — bot disabled');
@@ -442,8 +448,8 @@ async function startBot() {
   bot.on('chat_member', async (update) => {
     try {
       const chatId = String(update.chat.id);
-      console.log(`[CHAT_MEMBER EVENT] Chat: ${chatId} (${update.chat.title || 'unknown'}) | Monitored: ${isMonitoredChat(chatId)}`);
-      if (!isMonitoredChat(chatId)) return;
+      console.log(`[CHAT_MEMBER EVENT] Chat: ${chatId} (${update.chat.title || 'unknown'}) | VIP channel: ${isJoinLeaveChat(chatId)}`);
+      if (!isJoinLeaveChat(chatId)) return;
 
       const oldStatus = update.old_chat_member?.status;
       const newStatus = update.new_chat_member?.status;
@@ -480,10 +486,10 @@ async function startBot() {
   bot.on('new_chat_members', async (msg) => {
     try {
       const chatId = String(msg.chat.id);
-      console.log(`[NEW MEMBER EVENT] Chat ID: ${chatId} | Monitored: ${isMonitoredChat(chatId)}`);
+      console.log(`[NEW MEMBER EVENT] Chat ID: ${chatId} | VIP channel: ${isJoinLeaveChat(chatId)}`);
 
-      if (!isMonitoredChat(chatId)) {
-        console.log(`[SKIPPED] Chat ${chatId} not in monitored list`);
+      if (!isJoinLeaveChat(chatId)) {
+        console.log(`[SKIPPED] Chat ${chatId} — not VIP channel, ignoring join`);
         return;
       }
 
@@ -504,7 +510,7 @@ async function startBot() {
   bot.on('left_chat_member', async (msg) => {
     try {
       const chatId = String(msg.chat.id);
-      if (!isMonitoredChat(chatId)) return;
+      if (!isJoinLeaveChat(chatId)) return;
 
       const member = msg.left_chat_member;
       if (member.is_bot) return;
@@ -540,9 +546,9 @@ async function startBot() {
       const newStatus = cm.new_chat_member?.status;
       const member = cm.new_chat_member?.user;
 
-      console.log(`[RAW CHAT_MEMBER] Chat: ${chatId} (${cm.chat.title || 'unknown'}) | ${member?.first_name || '?'}: ${oldStatus} → ${newStatus} | Monitored: ${isMonitoredChat(chatId)}`);
+      console.log(`[RAW CHAT_MEMBER] Chat: ${chatId} (${cm.chat.title || 'unknown'}) | ${member?.first_name || '?'}: ${oldStatus} → ${newStatus} | VIP channel: ${isJoinLeaveChat(chatId)}`);
 
-      if (member && !member.is_bot && isMonitoredChat(chatId)) {
+      if (member && !member.is_bot && isJoinLeaveChat(chatId)) {
         const tgId = String(member.id);
         const tgUsername = member.username ? `@${member.username}` : null;
         const fullName = [member.first_name, member.last_name].filter(Boolean).join(' ');

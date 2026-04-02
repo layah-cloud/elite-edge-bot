@@ -24,18 +24,52 @@ function isMonitoredChat(chatId) {
   return ids.has(String(chatId));
 }
 
-function startBot() {
+async function startBot() {
   if (!TOKEN) {
     console.log('No TELEGRAM_BOT_TOKEN set — bot disabled');
     return null;
   }
 
-  // Enable chat_member updates so we catch joins in channels AND supergroups
-  // channel_post needed so the bot stays aware of channel activity
+  const ALLOWED_UPDATES = ['message', 'chat_member', 'my_chat_member', 'channel_post', 'chat_join_request'];
+
+  // CRITICAL: Explicitly tell Telegram which update types to send us BEFORE starting polling.
+  // node-telegram-bot-api doesn't reliably pass allowed_updates, so we call deleteWebhook
+  // with the allowed_updates parameter which resets Telegram's update filter for this bot.
+  try {
+    const https = require('https');
+    const url = `https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=false`;
+    await new Promise((resolve, reject) => {
+      https.get(url, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => { console.log('[INIT] deleteWebhook:', data); resolve(); });
+      }).on('error', reject);
+    });
+
+    // Now call getUpdates once with allowed_updates to register them with Telegram
+    const params = new URLSearchParams({
+      allowed_updates: JSON.stringify(ALLOWED_UPDATES),
+      limit: '0',
+      timeout: '0'
+    });
+    const initUrl = `https://api.telegram.org/bot${TOKEN}/getUpdates?${params}`;
+    await new Promise((resolve, reject) => {
+      https.get(initUrl, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => { console.log('[INIT] getUpdates (set allowed_updates):', data); resolve(); });
+      }).on('error', reject);
+    });
+  } catch (err) {
+    console.error('[INIT] Failed to set allowed_updates:', err.message);
+  }
+
+  // Start polling WITHOUT autoStart so we can apply the processUpdate monkey-patch first
   const bot = new TelegramBot(TOKEN, {
     polling: {
+      autoStart: false,
       params: {
-        allowed_updates: ['message', 'chat_member', 'my_chat_member', 'channel_post', 'chat_join_request']
+        allowed_updates: ALLOWED_UPDATES
       }
     }
   });
@@ -535,6 +569,10 @@ function startBot() {
     // Still call the original so the library processes other update types normally
     return originalProcessUpdate(update);
   };
+
+  // NOW start polling — after the processUpdate monkey-patch is in place
+  bot.startPolling();
+  console.log('[INIT] Polling started with allowed_updates:', JSON.stringify(ALLOWED_UPDATES));
 
   // Graceful shutdown — stop polling immediately when Railway sends SIGTERM during deploys
   // This prevents the old instance from competing with the new one for Telegram updates

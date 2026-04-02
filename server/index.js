@@ -6,7 +6,7 @@ async function start() {
   await initDB();
   console.log('Database initialized');
 
-  const bot = startBot();
+  const bot = await startBot();
   startWeeklyReport(bot);
 
   console.log('Elite Edge Bot running (standalone worker)');

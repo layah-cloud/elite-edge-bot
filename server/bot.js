@@ -308,7 +308,7 @@ async function startBot() {
             "SELECT id, status, full_name FROM members WHERE telegram_username = $1",
             [tgUsername]
           );
-          if (byUsername.rows.length > 0 && byUsername.rows[0].status === 'active') {
+          if (byUsername.rows.length > 0 && (byUsername.rows[0].status === 'active' || byUsername.rows[0].status === 'pending')) {
             memberId = byUsername.rows[0].id;
           }
         }
@@ -317,7 +317,7 @@ async function startBot() {
           console.log(`[DRIVE] Denied — ${fullName} (${tgId}) not found in CRM`);
           return;
         }
-      } else if (memberResult.rows[0].status !== 'active') {
+      } else if (memberResult.rows[0].status !== 'active' && memberResult.rows[0].status !== 'pending') {
         await bot.sendMessage(msg.chat.id, "You need to be a VIP member to access this course. Please make sure you have clicked the link the sign up team gave you and requested to join.");
         console.log(`[DRIVE] Denied — ${fullName} (${tgId}) status is ${memberResult.rows[0].status}`);
         return;

@@ -361,7 +361,7 @@ async function startBot() {
       if (NOTIFY_CHAT_ID) {
         try {
           const tgHandle = msg.from.username ? ` (@${msg.from.username})` : '';
-          await bot.sendMessage(NOTIFY_CHAT_ID, `📚 DeFi course shared!\n\nMember: ${fullName}${tgHandle}\nEmail: ${email}`);
+          await bot.sendMessage(NOTIFY_CHAT_ID, `📚 DeFi course + Crypto Bible sent!\n\nMember: ${fullName}${tgHandle}\nEmail: ${email}`);
         } catch (e) { console.error('[NOTIFY ERROR]', e.message); }
       }
 

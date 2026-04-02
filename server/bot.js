@@ -33,43 +33,65 @@ async function startBot() {
   const ALLOWED_UPDATES = ['message', 'chat_member', 'my_chat_member', 'channel_post', 'chat_join_request'];
 
   // CRITICAL: Explicitly tell Telegram which update types to send us BEFORE starting polling.
-  // node-telegram-bot-api doesn't reliably pass allowed_updates, so we call deleteWebhook
-  // with the allowed_updates parameter which resets Telegram's update filter for this bot.
-  try {
-    const https = require('https');
-    const url = `https://api.telegram.org/bot${TOKEN}/deleteWebhook?drop_pending_updates=false`;
-    await new Promise((resolve, reject) => {
+  // node-telegram-bot-api serializes arrays incorrectly for Telegram's API.
+  // We must call getUpdates with a properly JSON-encoded allowed_updates string.
+  const https = require('https');
+
+  function apiCall(method, queryParams = {}) {
+    const params = new URLSearchParams(queryParams);
+    const url = `https://api.telegram.org/bot${TOKEN}/${method}?${params}`;
+    return new Promise((resolve, reject) => {
       https.get(url, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
-        res.on('end', () => { console.log('[INIT] deleteWebhook:', data); resolve(); });
+        res.on('end', () => {
+          try { resolve(JSON.parse(data)); } catch (e) { resolve({ ok: false, raw: data }); }
+        });
       }).on('error', reject);
     });
+  }
 
-    // Now call getUpdates once with allowed_updates to register them with Telegram
-    const params = new URLSearchParams({
-      allowed_updates: JSON.stringify(ALLOWED_UPDATES),
-      limit: '0',
-      timeout: '0'
-    });
-    const initUrl = `https://api.telegram.org/bot${TOKEN}/getUpdates?${params}`;
-    await new Promise((resolve, reject) => {
-      https.get(initUrl, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => { console.log('[INIT] getUpdates (set allowed_updates):', data); resolve(); });
-      }).on('error', reject);
-    });
+  // Wait a few seconds for old instance to fully stop (Railway deploy overlap)
+  console.log('[INIT] Waiting 5s for old instance to stop...');
+  await new Promise(r => setTimeout(r, 5000));
+
+  try {
+    // Clear any stale webhook
+    const wh = await apiCall('deleteWebhook', { drop_pending_updates: 'false' });
+    console.log('[INIT] deleteWebhook:', JSON.stringify(wh));
+
+    // Retry getUpdates up to 3 times to register allowed_updates
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const result = await apiCall('getUpdates', {
+        allowed_updates: JSON.stringify(ALLOWED_UPDATES),
+        limit: '0',
+        timeout: '0'
+      });
+      console.log(`[INIT] getUpdates attempt ${attempt}:`, JSON.stringify(result));
+      if (result.ok) {
+        console.log('[INIT] allowed_updates registered successfully:', JSON.stringify(ALLOWED_UPDATES));
+        break;
+      }
+      if (result.error_code === 409) {
+        console.log(`[INIT] 409 conflict (old instance still polling) — retrying in 5s...`);
+        await new Promise(r => setTimeout(r, 5000));
+      } else {
+        break; // Other error, don't retry
+      }
+    }
   } catch (err) {
     console.error('[INIT] Failed to set allowed_updates:', err.message);
   }
 
   // Start polling WITHOUT autoStart so we can apply the processUpdate monkey-patch first
+  // IMPORTANT: allowed_updates must be a JSON string, NOT an array.
+  // node-telegram-bot-api uses qs library which serializes arrays as allowed_updates[0]=x
+  // but Telegram API expects allowed_updates=["x","y"] (JSON-encoded string).
   const bot = new TelegramBot(TOKEN, {
     polling: {
       autoStart: false,
       params: {
-        allowed_updates: ALLOWED_UPDATES
+        allowed_updates: JSON.stringify(ALLOWED_UPDATES)
       }
     }
   });

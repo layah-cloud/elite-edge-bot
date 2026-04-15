@@ -356,9 +356,9 @@ async function startBot() {
       // Send the Crypto Bible PDF
       try {
         await bot.sendDocument(msg.chat.id, CRYPTO_BIBLE_PATH, {
-          caption: '📖 Here\'s your Crypto Bible! A must read.'
-        }, { filename: 'Crypto Bible.pdf', contentType: 'application/pdf' });
-        console.log(`[BIBLE] Sent Crypto Bible to ${fullName} (${tgId})`);
+          caption: '📖 Here\'s your Crypto Traders Manual 2.0! A must read.'
+        }, { filename: 'Crypto Traders Manual 2.0.pdf', contentType: 'application/pdf' });
+        console.log(`[BIBLE] Sent Crypto Traders Manual 2.0 to ${fullName} (${tgId})`);
       } catch (bibleErr) {
         console.error(`[BIBLE ERROR] Failed to send Crypto Bible to ${fullName}:`, bibleErr.message);
       }

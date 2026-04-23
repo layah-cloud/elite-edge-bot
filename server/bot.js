@@ -197,12 +197,19 @@ async function startBot() {
       }
     }
 
-    // Brand new member
-    await pool.query(
+    // Brand new member — use WHERE NOT EXISTS to avoid race-condition duplicates
+    // (same member joining VIP + discussion group fires two events at once).
+    const insertResult = await pool.query(
       `INSERT INTO members (telegram_username, telegram_id, full_name, join_date, status, notes)
-       VALUES ($1, $2, $3, CURRENT_DATE, 'pending', 'Auto-detected by bot')`,
+       SELECT $1, $2, $3, CURRENT_DATE, 'pending', 'Auto-detected by bot'
+       WHERE NOT EXISTS (SELECT 1 FROM members WHERE telegram_id = $2)
+       RETURNING id`,
       [tgUsername, tgId, fullName]
     );
+    if (insertResult.rows.length === 0) {
+      console.log(`[SKIP DUPLICATE] ${fullName} (${tgId}) was just inserted by a concurrent event — skipping`);
+      return;
+    }
 
     console.log(`[ADDED] New member: ${fullName} (${tgUsername || tgId}) — added to Pending`);
 
@@ -424,18 +431,24 @@ async function startBot() {
             await pool.query('UPDATE members SET telegram_id = $1 WHERE id = $2', [tgId, found.id]);
             console.log(`[ID CAPTURED] Stored telegram_id ${tgId} for ${found.full_name} (${tgUsername})`);
           } else {
-            // Truly not found anywhere — unknown member in the group
-            await pool.query(
+            // Truly not found anywhere — unknown member. Race-safe insert:
+            // another event for the same tgid could fire simultaneously (e.g. from
+            // join events), so only insert if not already present.
+            const unknownInsert = await pool.query(
               `INSERT INTO members (telegram_username, telegram_id, full_name, join_date, status, notes)
-               VALUES ($1, $2, $3, CURRENT_DATE, 'pending', 'Auto-detected from group chat — not previously in CRM')`,
+               SELECT $1, $2, $3, CURRENT_DATE, 'pending', 'Auto-detected from group chat — not previously in CRM'
+               WHERE NOT EXISTS (SELECT 1 FROM members WHERE telegram_id = $2)
+               RETURNING id`,
               [tgUsername, tgId, fullName]
             );
-            console.log(`[UNKNOWN MEMBER ADDED] ${fullName} (${tgUsername || 'no username'}, ${tgId}) — added to CRM as pending`);
-            try {
-              await bot.sendMessage('6402066483',
-                `⚠️ Unknown member detected in VIP group:\n\n👤 ${fullName}\n📎 ${tgUsername || 'No username'}\n🆔 ${tgId}\n\nThey were not in the CRM. Added as Pending for review.`
-              );
-            } catch (notifyErr) { /* ignore notification failure */ }
+            if (unknownInsert.rows.length > 0) {
+              console.log(`[UNKNOWN MEMBER ADDED] ${fullName} (${tgUsername || 'no username'}, ${tgId}) — added to CRM as pending`);
+              try {
+                await bot.sendMessage('6402066483',
+                  `⚠️ Unknown member detected in VIP group:\n\n👤 ${fullName}\n📎 ${tgUsername || 'No username'}\n🆔 ${tgId}\n\nThey were not in the CRM. Added as Pending for review.`
+                );
+              } catch (notifyErr) { /* ignore notification failure */ }
+            }
           }
         }
       } catch (e) {

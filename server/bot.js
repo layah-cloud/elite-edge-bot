@@ -310,40 +310,77 @@ async function startBot() {
     }
 
     try {
-      // Check if this person is an active member in the CRM
-      const memberResult = await pool.query(
-        "SELECT id, status, full_name FROM members WHERE telegram_id = $1",
+      const tgUsername = msg.from.username ? `@${msg.from.username}` : null;
+      const firstName = (msg.from.first_name || '').trim();
+
+      // Try in order: telegram_id → telegram_username → exact full_name → first-name prefix
+      // (covers manually-added members whose CRM row has only full_name set).
+      let match = null;
+      let matchedBy = null;
+
+      const r1 = await pool.query(
+        "SELECT id, status, full_name, telegram_id, telegram_username FROM members WHERE telegram_id = $1",
         [tgId]
       );
+      if (r1.rows.length > 0) { match = r1.rows[0]; matchedBy = 'telegram_id'; }
 
-      let memberId = null;
-      if (memberResult.rows.length === 0) {
-        // Try by username
-        const tgUsername = msg.from.username ? `@${msg.from.username}` : null;
-        if (tgUsername) {
-          const byUsername = await pool.query(
-            "SELECT id, status, full_name FROM members WHERE telegram_username = $1",
-            [tgUsername]
-          );
-          if (byUsername.rows.length > 0 && (byUsername.rows[0].status === 'active' || byUsername.rows[0].status === 'pending')) {
-            memberId = byUsername.rows[0].id;
-          }
-        }
-        if (!memberId) {
-          await bot.sendMessage(msg.chat.id, "You need to be a VIP member to access this course. Please make sure you have clicked the link the sign up team gave you and requested to join.");
-          console.log(`[DRIVE] Denied — ${fullName} (${tgId}) not found in CRM`);
-          return;
-        }
-      } else if (memberResult.rows[0].status !== 'active' && memberResult.rows[0].status !== 'pending') {
-        await bot.sendMessage(msg.chat.id, "You need to be a VIP member to access this course. Please make sure you have clicked the link the sign up team gave you and requested to join.");
-        console.log(`[DRIVE] Denied — ${fullName} (${tgId}) status is ${memberResult.rows[0].status}`);
-        return;
-      } else {
-        memberId = memberResult.rows[0].id;
+      if (!match && tgUsername) {
+        const r2 = await pool.query(
+          "SELECT id, status, full_name, telegram_id, telegram_username FROM members WHERE LOWER(telegram_username) = LOWER($1)",
+          [tgUsername]
+        );
+        if (r2.rows.length > 0) { match = r2.rows[0]; matchedBy = 'telegram_username'; }
       }
 
-      // Store email in CRM
-      if (memberId) {
+      if (!match && fullName) {
+        const r3 = await pool.query(
+          "SELECT id, status, full_name, telegram_id, telegram_username FROM members WHERE LOWER(full_name) = LOWER($1)",
+          [fullName]
+        );
+        if (r3.rows.length > 0) { match = r3.rows[0]; matchedBy = 'full_name'; }
+      }
+
+      // Last-resort fuzzy: first-name prefix on full_name (e.g. CRM "Kalem McQuillan" vs TG "Kalem M.")
+      if (!match && firstName && firstName.length >= 3) {
+        const r4 = await pool.query(
+          `SELECT id, status, full_name, telegram_id, telegram_username FROM members
+           WHERE LOWER(full_name) LIKE LOWER($1)
+             AND telegram_id IS NULL AND telegram_username IS NULL
+             AND status IN ('active','pending')`,
+          [`${firstName}%`]
+        );
+        // Only auto-match if there's exactly ONE unclaimed candidate — avoid silently linking the wrong record.
+        if (r4.rows.length === 1) { match = r4.rows[0]; matchedBy = 'first_name_fuzzy'; }
+      }
+
+      if (!match) {
+        await bot.sendMessage(msg.chat.id, "You need to be a VIP member to access this course. Please make sure you have clicked the link the sign up team gave you and requested to join.");
+        console.log(`[DRIVE] Denied — ${fullName} (${tgId}) not found in CRM by id/username/name`);
+        return;
+      }
+      if (match.status !== 'active' && match.status !== 'pending') {
+        await bot.sendMessage(msg.chat.id, "You need to be a VIP member to access this course. Please make sure you have clicked the link the sign up team gave you and requested to join.");
+        console.log(`[DRIVE] Denied — ${fullName} (${tgId}) status is ${match.status}`);
+        return;
+      }
+
+      const memberId = match.id;
+      console.log(`[DRIVE] Matched member ${memberId} (${match.full_name}) by ${matchedBy}`);
+
+      // Backfill telegram_id/username on the matched row so we never have to fuzzy-match again.
+      const needsTgId = !match.telegram_id;
+      const needsTgUsername = !match.telegram_username && tgUsername;
+      if (needsTgId || needsTgUsername) {
+        await pool.query(
+          `UPDATE members
+           SET telegram_id = COALESCE(telegram_id, $1),
+               telegram_username = COALESCE(telegram_username, $2),
+               email = $3
+           WHERE id = $4`,
+          [tgId, tgUsername, email, memberId]
+        );
+        console.log(`[DRIVE] Backfilled tg fields for member ${memberId} (id=${needsTgId}, username=${needsTgUsername})`);
+      } else {
         await pool.query('UPDATE members SET email = $1 WHERE id = $2', [email, memberId]);
         console.log(`[DRIVE] Stored email ${email} for member ID ${memberId}`);
       }

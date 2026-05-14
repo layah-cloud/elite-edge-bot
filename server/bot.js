@@ -158,20 +158,24 @@ async function startBot() {
       return;
     }
 
-    // Check by username/name across both columns (handles swapped fields from bulk imports)
-    // Case-insensitive search in telegram_username, full_name, and also by display name
+    // Check by username/name across both columns (handles swapped fields from bulk imports).
+    // Case-insensitive AND whitespace-normalised search so "Kalem Mc Quillan" matches
+    // CRM "Kalem McQuillan" — Telegram lets users put spaces inside surnames.
     if (tgUsername || fullName) {
       let existingByMatch = { rows: [] };
       if (tgUsername) {
         existingByMatch = await pool.query(
-          'SELECT id, status FROM members WHERE LOWER(telegram_username) = LOWER($1) OR LOWER(full_name) = LOWER($1)',
+          `SELECT id, status FROM members
+           WHERE REPLACE(LOWER(telegram_username), ' ', '') = REPLACE(LOWER($1), ' ', '')
+              OR REPLACE(LOWER(full_name), ' ', '') = REPLACE(LOWER($1), ' ', '')`,
           [tgUsername]
         );
       }
-      // Also check by full name if not found by username
       if (existingByMatch.rows.length === 0 && fullName) {
         existingByMatch = await pool.query(
-          'SELECT id, status FROM members WHERE LOWER(full_name) = LOWER($1) OR LOWER(telegram_username) = LOWER($1)',
+          `SELECT id, status FROM members
+           WHERE REPLACE(LOWER(full_name), ' ', '') = REPLACE(LOWER($1), ' ', '')
+              OR REPLACE(LOWER(telegram_username), ' ', '') = REPLACE(LOWER($1), ' ', '')`,
           [fullName]
         );
       }
@@ -180,14 +184,14 @@ async function startBot() {
         const row = existingByMatch.rows[0];
         if (row.status === 'archived') {
           await pool.query(
-            `UPDATE members SET telegram_id=$1, status='pending', archived_reason=NULL, archived_date=NULL,
+            `UPDATE members SET telegram_id=$1::varchar, status='pending', archived_reason=NULL, archived_date=NULL,
              notes='Re-joined group — reactivated from archive', join_date=CURRENT_DATE WHERE id=$2`,
             [tgId, row.id]
           );
           console.log(`[REACTIVATED BY MATCH] ${fullName} (${tgUsername}) — moved back to Pending`);
         } else {
           await pool.query(
-            'UPDATE members SET telegram_id=$1 WHERE id=$2',
+            'UPDATE members SET telegram_id=$1::varchar WHERE id=$2',
             [tgId, row.id]
           );
           console.log(`[UPDATED] ${fullName} (${tgUsername}) — added telegram_id ${tgId}`);
@@ -203,10 +207,12 @@ async function startBot() {
 
     // Brand new member — use WHERE NOT EXISTS to avoid race-condition duplicates
     // (same member joining VIP + discussion group fires two events at once).
+    // Explicit $2::varchar cast — without it, pg-node infers `text` and Postgres
+    // rejects "inconsistent types deduced for parameter $2" because telegram_id is varchar.
     const insertResult = await pool.query(
       `INSERT INTO members (telegram_username, telegram_id, full_name, join_date, status, notes)
-       SELECT $1, $2, $3, CURRENT_DATE, 'pending', 'Auto-detected by bot'
-       WHERE NOT EXISTS (SELECT 1 FROM members WHERE telegram_id = $2)
+       SELECT $1::varchar, $2::varchar, $3::varchar, CURRENT_DATE, 'pending', 'Auto-detected by bot'
+       WHERE NOT EXISTS (SELECT 1 FROM members WHERE telegram_id = $2::varchar)
        RETURNING id`,
       [tgUsername, tgId, fullName]
     );
@@ -443,42 +449,42 @@ async function startBot() {
       const fullName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(' ');
 
       try {
-        // First check if they exist by telegram_id
-        const byId = await pool.query('SELECT id, full_name FROM members WHERE telegram_id = $1', [tgId]);
+        const byId = await pool.query('SELECT id, full_name FROM members WHERE telegram_id = $1::varchar', [tgId]);
 
         if (byId.rows.length > 0) {
           // Known member, already has TG ID stored — nothing to do
         } else {
-          // Check by username AND name across both columns (handles swapped fields from bulk imports)
+          // Whitespace-normalised matching: "Kalem Mc Quillan" should match "Kalem McQuillan".
           let found = null;
           if (tgUsername) {
             const byUsername = await pool.query(
-              'SELECT id, full_name FROM members WHERE LOWER(telegram_username) = LOWER($1) OR LOWER(full_name) = LOWER($1)',
+              `SELECT id, full_name FROM members
+               WHERE REPLACE(LOWER(telegram_username), ' ', '') = REPLACE(LOWER($1), ' ', '')
+                  OR REPLACE(LOWER(full_name), ' ', '') = REPLACE(LOWER($1), ' ', '')`,
               [tgUsername]
             );
             if (byUsername.rows.length > 0) found = byUsername.rows[0];
           }
-          // Also check by display name if not found by username
           if (!found && fullName) {
             const byName = await pool.query(
-              'SELECT id, full_name FROM members WHERE LOWER(full_name) = LOWER($1) OR LOWER(telegram_username) = LOWER($1)',
+              `SELECT id, full_name FROM members
+               WHERE REPLACE(LOWER(full_name), ' ', '') = REPLACE(LOWER($1), ' ', '')
+                  OR REPLACE(LOWER(telegram_username), ' ', '') = REPLACE(LOWER($1), ' ', '')`,
               [fullName]
             );
             if (byName.rows.length > 0) found = byName.rows[0];
           }
 
           if (found) {
-            // Found existing member, just update their telegram_id
-            await pool.query('UPDATE members SET telegram_id = $1 WHERE id = $2', [tgId, found.id]);
+            await pool.query('UPDATE members SET telegram_id = $1::varchar WHERE id = $2', [tgId, found.id]);
             console.log(`[ID CAPTURED] Stored telegram_id ${tgId} for ${found.full_name} (${tgUsername})`);
           } else {
-            // Truly not found anywhere — unknown member. Race-safe insert:
-            // another event for the same tgid could fire simultaneously (e.g. from
-            // join events), so only insert if not already present.
+            // Truly not found anywhere — race-safe insert with explicit varchar casts
+            // so pg-node doesn't infer `text` and trigger "inconsistent types deduced".
             const unknownInsert = await pool.query(
               `INSERT INTO members (telegram_username, telegram_id, full_name, join_date, status, notes)
-               SELECT $1, $2, $3, CURRENT_DATE, 'pending', 'Auto-detected from group chat — not previously in CRM'
-               WHERE NOT EXISTS (SELECT 1 FROM members WHERE telegram_id = $2)
+               SELECT $1::varchar, $2::varchar, $3::varchar, CURRENT_DATE, 'pending', 'Auto-detected from group chat — not previously in CRM'
+               WHERE NOT EXISTS (SELECT 1 FROM members WHERE telegram_id = $2::varchar)
                RETURNING id`,
               [tgUsername, tgId, fullName]
             );

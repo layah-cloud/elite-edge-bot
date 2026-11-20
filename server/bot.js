@@ -404,7 +404,7 @@ async function startBot() {
       });
 
       await bot.sendMessage(msg.chat.id,
-        `✅ Done! Layah's DeFi Video Course has been shared with ${email}.\n\nCheck your email for the Google Drive invitation. If you don't see it, check your spam folder.`
+        `✅ Done! Layah's DeFi Video Course has been shared with ${email}.\n\nCheck your email for the Google Drive invitation. If you don't see it, check your spam folder.\n\nYou're also getting the Elite Edge Bible and The DCA Guide To Bitcoin right here below 👇`
       );
       console.log(`[DRIVE] Shared folder with ${email} for member ${fullName} (${tgId})`);
 
@@ -421,9 +421,9 @@ async function startBot() {
       // Send the DCA Course PDF
       try {
         await bot.sendDocument(msg.chat.id, DCA_COURSE_PATH, {
-          caption: '📉 Here\'s your Elite Edge DCA Course! How to buy the Bitcoin bottom like a pro in a bear market.'
-        }, { filename: 'Elite Edge DCA Course.pdf', contentType: 'application/pdf' });
-        console.log(`[DCA] Sent DCA Course to ${fullName} (${tgId})`);
+          caption: '📉 The DCA Guide To Bitcoin: By Layah and Gideon Heilpern'
+        }, { filename: 'The DCA Guide To Bitcoin.pdf', contentType: 'application/pdf' });
+        console.log(`[DCA] Sent DCA Guide To Bitcoin to ${fullName} (${tgId})`);
       } catch (dcaErr) {
         console.error(`[DCA ERROR] Failed to send DCA Course to ${fullName}:`, dcaErr.message);
       }
@@ -432,7 +432,7 @@ async function startBot() {
       if (NOTIFY_CHAT_ID) {
         try {
           const tgHandle = msg.from.username ? ` (@${msg.from.username})` : '';
-          await bot.sendMessage(NOTIFY_CHAT_ID, `📚 DeFi course + Crypto Bible + DCA Course sent!\n\nMember: ${fullName}${tgHandle}\nEmail: ${email}`);
+          await bot.sendMessage(NOTIFY_CHAT_ID, `📚 DeFi course + Crypto Bible + DCA Guide sent!\n\nMember: ${fullName}${tgHandle}\nEmail: ${email}`);
         } catch (e) { console.error('[NOTIFY ERROR]', e.message); }
       }
 
